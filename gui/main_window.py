@@ -29,8 +29,8 @@ class PcapGeneratorGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("PCAP生成工具 v2.0 - 支持高级数据帧配置")
-        self.root.geometry("800x900")
+        self.root.title("PCAP生成工具 v2.1 - 支持数据包预览")
+        self.root.geometry("900x1000")
         self.root.resizable(True, True)
         
         # 设置窗口图标（如果有的话）
@@ -194,17 +194,59 @@ class PcapGeneratorGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=row, column=0, columnspan=2, pady=(20, 0))
         row += 1
-        
+
         self.generate_btn = ttk.Button(button_frame, text="生成数据包", command=self.generate_packets)
         self.generate_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
+
         self.save_btn = ttk.Button(button_frame, text="保存PCAP文件", command=self.save_pcap, state=tk.DISABLED)
-        self.save_btn.pack(side=tk.LEFT)
-        
+        self.save_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.preview_btn = ttk.Button(button_frame, text="预览数据包", command=self.preview_packets, state=tk.DISABLED)
+        self.preview_btn.pack(side=tk.LEFT)
+
         # 状态显示
         self.status_var = tk.StringVar(value="就绪")
         status_label = ttk.Label(main_frame, textvariable=self.status_var, foreground="blue")
         status_label.grid(row=row, column=0, columnspan=2, pady=(10, 0))
+
+        # 数据包预览区域
+        preview_frame = ttk.LabelFrame(main_frame, text="数据包预览", padding="10")
+        preview_frame.grid(row=row+1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        preview_frame.columnconfigure(0, weight=1)
+        preview_frame.rowconfigure(0, weight=1)
+
+        # 创建Treeview用于显示数据包列表
+        columns = ("序号", "协议", "源地址", "目标地址", "长度", "信息")
+        self.packet_tree = ttk.Treeview(preview_frame, columns=columns, show="headings", height=8)
+
+        # 设置列标题和宽度
+        self.packet_tree.heading("序号", text="序号")
+        self.packet_tree.heading("协议", text="协议")
+        self.packet_tree.heading("源地址", text="源地址")
+        self.packet_tree.heading("目标地址", text="目标地址")
+        self.packet_tree.heading("长度", text="长度")
+        self.packet_tree.heading("信息", text="信息")
+
+        self.packet_tree.column("序号", width=50, anchor=tk.CENTER)
+        self.packet_tree.column("协议", width=80, anchor=tk.CENTER)
+        self.packet_tree.column("源地址", width=120, anchor=tk.CENTER)
+        self.packet_tree.column("目标地址", width=120, anchor=tk.CENTER)
+        self.packet_tree.column("长度", width=60, anchor=tk.CENTER)
+        self.packet_tree.column("信息", width=300, anchor=tk.W)
+
+        # 添加滚动条
+        packet_scrollbar = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.packet_tree.yview)
+        self.packet_tree.configure(yscrollcommand=packet_scrollbar.set)
+
+        # 布局
+        self.packet_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        packet_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+        # 绑定双击事件
+        self.packet_tree.bind("<Double-1>", self.on_packet_double_click)
+
+        # 配置主窗口网格权重
+        main_frame.rowconfigure(row+1, weight=1)
         
     def setup_ipv4_params(self):
         """设置IPv4参数"""
@@ -661,6 +703,10 @@ class PcapGeneratorGUI:
 
             self.status_var.set(f"成功生成 {len(packets)} 个数据包")
             self.save_btn.config(state=tk.NORMAL)
+            self.preview_btn.config(state=tk.NORMAL)
+
+            # 自动显示预览
+            self.update_packet_preview()
 
         except Exception as e:
             messagebox.showerror("生成错误", f"生成数据包时发生错误：{str(e)}")
@@ -1046,6 +1092,196 @@ class PcapGeneratorGUI:
             packets.append(udp_packet)
 
         return packets
+
+    def analyze_packet(self, packet):
+        """分析数据包并返回详细信息"""
+        try:
+            from scapy.layers.inet import IP, TCP, UDP
+            from scapy.layers.inet6 import IPv6
+            from scapy.layers.l2 import Ether
+
+            info = {
+                'protocol': 'Unknown',
+                'src_addr': '',
+                'dst_addr': '',
+                'length': len(packet),
+                'summary': ''
+            }
+
+            # 分析以太网层
+            if Ether in packet:
+                eth = packet[Ether]
+                info['src_addr'] = eth.src
+                info['dst_addr'] = eth.dst
+
+            # 分析IP层
+            if IP in packet:
+                ip = packet[IP]
+                info['src_addr'] = f"{info['src_addr']} ({ip.src})"
+                info['dst_addr'] = f"{info['dst_addr']} ({ip.dst})"
+
+                # 分析传输层
+                if TCP in packet:
+                    tcp = packet[TCP]
+                    info['protocol'] = 'TCP'
+                    info['src_addr'] += f":{tcp.sport}"
+                    info['dst_addr'] += f":{tcp.dport}"
+
+                    # TCP标志位分析
+                    flags = []
+                    if tcp.flags & 0x01: flags.append('FIN')
+                    if tcp.flags & 0x02: flags.append('SYN')
+                    if tcp.flags & 0x04: flags.append('RST')
+                    if tcp.flags & 0x08: flags.append('PSH')
+                    if tcp.flags & 0x10: flags.append('ACK')
+                    if tcp.flags & 0x20: flags.append('URG')
+
+                    flag_str = ','.join(flags) if flags else 'None'
+                    data_len = len(tcp.payload) if tcp.payload else 0
+                    info['summary'] = f"Flags=[{flag_str}] Seq={tcp.seq} Ack={tcp.ack} Len={data_len}"
+
+                elif UDP in packet:
+                    udp = packet[UDP]
+                    info['protocol'] = 'UDP'
+                    info['src_addr'] += f":{udp.sport}"
+                    info['dst_addr'] += f":{udp.dport}"
+
+                    data_len = len(udp.payload) if udp.payload else 0
+                    info['summary'] = f"Len={data_len}"
+
+            elif IPv6 in packet:
+                ipv6 = packet[IPv6]
+                info['src_addr'] = f"{info['src_addr']} ({ipv6.src})"
+                info['dst_addr'] = f"{info['dst_addr']} ({ipv6.dst})"
+
+                if TCP in packet:
+                    tcp = packet[TCP]
+                    info['protocol'] = 'TCP'
+                    info['src_addr'] += f":{tcp.sport}"
+                    info['dst_addr'] += f":{tcp.dport}"
+
+                    flags = []
+                    if tcp.flags & 0x01: flags.append('FIN')
+                    if tcp.flags & 0x02: flags.append('SYN')
+                    if tcp.flags & 0x04: flags.append('RST')
+                    if tcp.flags & 0x08: flags.append('PSH')
+                    if tcp.flags & 0x10: flags.append('ACK')
+                    if tcp.flags & 0x20: flags.append('URG')
+
+                    flag_str = ','.join(flags) if flags else 'None'
+                    data_len = len(tcp.payload) if tcp.payload else 0
+                    info['summary'] = f"Flags=[{flag_str}] Seq={tcp.seq} Ack={tcp.ack} Len={data_len}"
+
+                elif UDP in packet:
+                    udp = packet[UDP]
+                    info['protocol'] = 'UDP'
+                    info['src_addr'] += f":{udp.sport}"
+                    info['dst_addr'] += f":{udp.dport}"
+
+                    data_len = len(udp.payload) if udp.payload else 0
+                    info['summary'] = f"Len={data_len}"
+
+            return info
+
+        except Exception as e:
+            return {
+                'protocol': 'Error',
+                'src_addr': '',
+                'dst_addr': '',
+                'length': len(packet),
+                'summary': f'分析错误: {str(e)}'
+            }
+
+    def update_packet_preview(self):
+        """更新数据包预览列表"""
+        # 清空现有项目
+        for item in self.packet_tree.get_children():
+            self.packet_tree.delete(item)
+
+        if not self.packet_generator.packets:
+            return
+
+        # 添加数据包信息
+        for i, packet in enumerate(self.packet_generator.packets, 1):
+            info = self.analyze_packet(packet)
+
+            self.packet_tree.insert('', 'end', values=(
+                i,
+                info['protocol'],
+                info['src_addr'],
+                info['dst_addr'],
+                info['length'],
+                info['summary']
+            ))
+
+    def preview_packets(self):
+        """预览数据包按钮点击事件"""
+        if not self.packet_generator.packets:
+            messagebox.showwarning("警告", "没有数据包可预览")
+            return
+
+        self.update_packet_preview()
+        messagebox.showinfo("预览", f"已显示 {len(self.packet_generator.packets)} 个数据包的详细信息")
+
+    def on_packet_double_click(self, event):
+        """双击数据包事件处理"""
+        selection = self.packet_tree.selection()
+        if not selection:
+            return
+
+        item = self.packet_tree.item(selection[0])
+        packet_index = int(item['values'][0]) - 1
+
+        if 0 <= packet_index < len(self.packet_generator.packets):
+            self.show_packet_details(packet_index)
+
+    def show_packet_details(self, packet_index):
+        """显示数据包详细信息"""
+        packet = self.packet_generator.packets[packet_index]
+
+        # 创建详细信息窗口
+        detail_window = tk.Toplevel(self.root)
+        detail_window.title(f"数据包 #{packet_index + 1} 详细信息")
+        detail_window.geometry("600x500")
+        detail_window.resizable(True, True)
+
+        # 创建文本框显示详细信息
+        text_frame = ttk.Frame(detail_window, padding="10")
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 10))
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 获取数据包详细信息
+        try:
+            packet_info = packet.show(dump=True)
+            hex_dump = packet.hexdump(dump=True)
+
+            detail_text = f"数据包 #{packet_index + 1} 详细信息\n"
+            detail_text += "=" * 50 + "\n\n"
+            detail_text += "协议层分析:\n"
+            detail_text += "-" * 20 + "\n"
+            detail_text += packet_info + "\n\n"
+            detail_text += "十六进制转储:\n"
+            detail_text += "-" * 20 + "\n"
+            detail_text += hex_dump
+
+            text_widget.insert(tk.END, detail_text)
+            text_widget.config(state=tk.DISABLED)
+
+        except Exception as e:
+            text_widget.insert(tk.END, f"无法显示数据包详细信息: {str(e)}")
+            text_widget.config(state=tk.DISABLED)
+
+        # 添加关闭按钮
+        button_frame = ttk.Frame(detail_window)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(button_frame, text="关闭", command=detail_window.destroy).pack(side=tk.RIGHT)
 
     def run(self):
         """运行GUI应用"""
