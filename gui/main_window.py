@@ -184,6 +184,11 @@ class PcapGeneratorGUI:
         self.advanced_data_frame = ttk.Frame(self.tcp_frame)
         self.advanced_data_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
         self.setup_advanced_data_config()
+
+        # UDP配置
+        self.udp_frame = ttk.Frame(transport_frame)
+        self.udp_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.setup_udp_config()
         
         # 生成和保存按钮
         button_frame = ttk.Frame(main_frame)
@@ -244,8 +249,10 @@ class PcapGeneratorGUI:
         """协议改变时的处理"""
         if self.protocol_var.get() == "TCP":
             self.tcp_frame.grid()
-        else:
+            self.udp_frame.grid_remove()
+        else:  # UDP
             self.tcp_frame.grid_remove()
+            self.udp_frame.grid()
 
     def on_data_mode_change(self, event=None):
         """数据配置模式改变时的处理"""
@@ -301,6 +308,161 @@ class PcapGeneratorGUI:
 
         # 初始隐藏高级模式
         self.advanced_data_frame.grid_remove()
+
+    def setup_udp_config(self):
+        """设置UDP配置界面"""
+        # 数据配置模式选择
+        ttk.Label(self.udp_frame, text="数据配置模式:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        self.udp_data_mode_var = tk.StringVar(value="简单模式")
+        udp_mode_combo = ttk.Combobox(self.udp_frame, textvariable=self.udp_data_mode_var,
+                                     values=["简单模式", "高级模式"], state="readonly", width=12)
+        udp_mode_combo.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        udp_mode_combo.bind('<<ComboboxSelected>>', self.on_udp_data_mode_change)
+
+        # 简单模式配置
+        self.udp_simple_data_frame = ttk.Frame(self.udp_frame)
+        self.udp_simple_data_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
+        self.udp_simple_data_frame.columnconfigure(1, weight=1)
+
+        # C2S数据配置
+        udp_c2s_frame = ttk.LabelFrame(self.udp_simple_data_frame, text="客户端→服务器数据 (C2S)", padding="5")
+        udp_c2s_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        udp_c2s_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(udp_c2s_frame, text="UTF-8内容:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        self.udp_c2s_data_var = tk.StringVar(value="DNS Query: example.com")
+        self.udp_c2s_data_entry = ttk.Entry(udp_c2s_frame, textvariable=self.udp_c2s_data_var, width=50)
+        self.udp_c2s_data_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+
+        # S2C数据配置
+        udp_s2c_frame = ttk.LabelFrame(self.udp_simple_data_frame, text="服务器→客户端数据 (S2C)", padding="5")
+        udp_s2c_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        udp_s2c_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(udp_s2c_frame, text="UTF-8内容:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        self.udp_s2c_data_var = tk.StringVar(value="DNS Response: 93.184.216.34")
+        self.udp_s2c_data_entry = ttk.Entry(udp_s2c_frame, textvariable=self.udp_s2c_data_var, width=50)
+        self.udp_s2c_data_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+
+        # 高级模式配置
+        self.udp_advanced_data_frame = ttk.Frame(self.udp_frame)
+        self.udp_advanced_data_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
+        self.setup_udp_advanced_data_config()
+
+        # 初始隐藏UDP框架和高级模式
+        self.udp_frame.grid_remove()
+        self.udp_advanced_data_frame.grid_remove()
+
+    def setup_udp_advanced_data_config(self):
+        """设置UDP高级数据配置界面"""
+        # 数据帧列表
+        list_frame = ttk.LabelFrame(self.udp_advanced_data_frame, text="UDP数据帧配置", padding="5")
+        list_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        list_frame.columnconfigure(0, weight=1)
+
+        # 列表头部
+        header_frame = ttk.Frame(list_frame)
+        header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        header_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(header_frame, text="方向", width=8).grid(row=0, column=0, padx=(0, 5))
+        ttk.Label(header_frame, text="数据内容", width=30).grid(row=0, column=1, padx=(0, 5))
+        ttk.Label(header_frame, text="格式", width=8).grid(row=0, column=2, padx=(0, 5))
+        ttk.Label(header_frame, text="操作", width=8).grid(row=0, column=3)
+
+        # UDP数据帧列表容器
+        self.udp_frames_container = ttk.Frame(list_frame)
+        self.udp_frames_container.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.udp_frames_container.columnconfigure(1, weight=1)
+
+        # UDP数据帧列表
+        self.udp_data_frames = []
+
+        # 添加按钮
+        udp_add_frame = ttk.Frame(list_frame)
+        udp_add_frame.grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+
+        ttk.Button(udp_add_frame, text="添加帧", command=self.add_udp_data_frame).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(udp_add_frame, text="清空所有", command=self.clear_udp_data_frames).pack(side=tk.LEFT)
+
+        # 默认添加一个UDP数据帧
+        self.add_udp_data_frame()
+
+    def on_udp_data_mode_change(self, event=None):
+        """UDP数据配置模式改变时的处理"""
+        if self.udp_data_mode_var.get() == "简单模式":
+            self.udp_simple_data_frame.grid()
+            self.udp_advanced_data_frame.grid_remove()
+        else:
+            self.udp_simple_data_frame.grid_remove()
+            self.udp_advanced_data_frame.grid()
+
+    def add_udp_data_frame(self):
+        """添加一个UDP数据帧配置行"""
+        frame_index = len(self.udp_data_frames)
+
+        # 创建帧配置行
+        frame_row = ttk.Frame(self.udp_frames_container)
+        frame_row.grid(row=frame_index, column=0, sticky=(tk.W, tk.E), pady=2)
+        frame_row.columnconfigure(1, weight=1)
+
+        # 方向选择
+        direction_var = tk.StringVar(value="客户端→服务器")
+        direction_combo = ttk.Combobox(frame_row, textvariable=direction_var,
+                                      values=["客户端→服务器", "服务器→客户端"],
+                                      state="readonly", width=12)
+        direction_combo.grid(row=0, column=0, padx=(0, 5))
+
+        # 数据内容输入
+        data_var = tk.StringVar(value="UDP Data")
+        data_entry = ttk.Entry(frame_row, textvariable=data_var, width=40)
+        data_entry.grid(row=0, column=1, padx=(0, 5), sticky=(tk.W, tk.E))
+
+        # 数据格式选择
+        format_var = tk.StringVar(value="UTF-8")
+        format_combo = ttk.Combobox(frame_row, textvariable=format_var,
+                                   values=["UTF-8", "十六进制"],
+                                   state="readonly", width=8)
+        format_combo.grid(row=0, column=2, padx=(0, 5))
+
+        # 删除按钮
+        delete_btn = ttk.Button(frame_row, text="删除", width=6,
+                               command=lambda: self.remove_udp_data_frame(frame_index))
+        delete_btn.grid(row=0, column=3)
+
+        # 保存帧信息
+        frame_info = {
+            'frame': frame_row,
+            'direction': direction_var,
+            'data': data_var,
+            'format': format_var,
+            'delete_btn': delete_btn
+        }
+
+        self.udp_data_frames.append(frame_info)
+
+    def remove_udp_data_frame(self, index):
+        """删除指定的UDP数据帧"""
+        if 0 <= index < len(self.udp_data_frames):
+            # 销毁GUI组件
+            self.udp_data_frames[index]['frame'].destroy()
+            # 从列表中移除
+            del self.udp_data_frames[index]
+            # 重新排列剩余的帧
+            self.refresh_udp_data_frames()
+
+    def clear_udp_data_frames(self):
+        """清空所有UDP数据帧"""
+        for frame_info in self.udp_data_frames:
+            frame_info['frame'].destroy()
+        self.udp_data_frames.clear()
+
+    def refresh_udp_data_frames(self):
+        """重新排列UDP数据帧显示"""
+        for i, frame_info in enumerate(self.udp_data_frames):
+            frame_info['frame'].grid(row=i, column=0, sticky=(tk.W, tk.E), pady=2)
+            # 更新删除按钮的命令
+            frame_info['delete_btn'].configure(command=lambda idx=i: self.remove_udp_data_frame(idx))
 
     def add_data_frame(self):
         """添加一个数据帧配置行"""
@@ -422,6 +584,16 @@ class PcapGeneratorGUI:
 
                     if not self.data_frames:
                         raise ValueError("高级模式下至少需要配置一个数据帧")
+            else:  # UDP验证
+                if self.udp_data_mode_var.get() == "简单模式":
+                    # 检查是否至少有一个UDP数据框有内容
+                    c2s_content = self.udp_c2s_data_var.get().strip()
+                    s2c_content = self.udp_s2c_data_var.get().strip()
+                    if not c2s_content and not s2c_content:
+                        raise ValueError("UDP简单模式下至少需要填写一个数据框的内容")
+                else:  # UDP高级模式
+                    if not self.udp_data_frames:
+                        raise ValueError("UDP高级模式下至少需要配置一个数据帧")
 
             return True
 
@@ -476,13 +648,12 @@ class PcapGeneratorGUI:
                         eth_frame, ip_layer, src_port, dst_port, max_frame_size
                     )
             else:  # UDP
-                if self.data_mode_var.get() == "简单模式":
-                    data_size = int(self.data_size_var.get()) if self.data_size_var.get() else 0
-                    packets = self.packet_generator.generate_udp_packets(
-                        eth_frame, ip_layer, src_port, dst_port, data_size
+                if self.udp_data_mode_var.get() == "简单模式":
+                    packets = self.generate_simple_udp_packets(
+                        eth_frame, ip_layer, src_port, dst_port
                     )
                 else:  # UDP高级模式
-                    packets = self.generate_advanced_udp_packets(
+                    packets = self.generate_advanced_udp_packets_new(
                         eth_frame, ip_layer, src_port, dst_port
                     )
 
@@ -666,7 +837,8 @@ class PcapGeneratorGUI:
         packets.append(ack_packet)
 
         # 4. 数据传输
-        for frame_info in self.data_frames:
+        last_direction = None
+        for i, frame_info in enumerate(self.data_frames):
             direction = frame_info['direction'].get()
             content = frame_info['data'].get()
             format_type = frame_info['format'].get()
@@ -678,6 +850,11 @@ class PcapGeneratorGUI:
                 data_bytes = self.parse_data_content(content, format_type)
             except ValueError as e:
                 raise ValueError(f"数据帧解析错误: {e}")
+
+            # 检查是否需要生成ACK（连续两包方向相反）
+            need_ack_before = (last_direction is not None and
+                              last_direction != direction and
+                              len(packets) > 3)  # 确保握手已完成
 
             # 根据方向选择帧和端口
             if direction == "客户端→服务器":
@@ -703,6 +880,20 @@ class PcapGeneratorGUI:
                 current_seq = self.packet_generator.tcp_ack
                 current_ack = self.packet_generator.tcp_seq
 
+            # 如果方向改变，先生成前一个方向的ACK
+            if need_ack_before:
+                if last_direction == "客户端→服务器":
+                    # 服务器发送ACK
+                    ack_packet = eth_frame_reply / ip_layer_reply / self.packet_generator.create_tcp_ack(
+                        dst_port, src_port, self.packet_generator.tcp_ack, self.packet_generator.tcp_seq
+                    )
+                else:
+                    # 客户端发送ACK
+                    ack_packet = eth_frame / ip_layer / self.packet_generator.create_tcp_ack(
+                        src_port, dst_port, self.packet_generator.tcp_seq, self.packet_generator.tcp_ack
+                    )
+                packets.append(ack_packet)
+
             # 数据分片
             remaining_data = data_bytes
             while remaining_data:
@@ -722,15 +913,10 @@ class PcapGeneratorGUI:
                 else:
                     self.packet_generator.tcp_ack += len(chunk_data)
 
-                # 生成ACK响应
-                ack_response = reply_eth / reply_ip / self.packet_generator.create_tcp_ack(
-                    reply_src_port, reply_dst_port,
-                    current_ack if direction == "客户端→服务器" else current_seq + len(chunk_data),
-                    current_seq + len(chunk_data) if direction == "客户端→服务器" else current_ack
-                )
-                packets.append(ack_response)
-
                 current_seq += len(chunk_data)
+
+            # 记录当前方向
+            last_direction = direction
 
         return packets
 
@@ -757,6 +943,89 @@ class PcapGeneratorGUI:
                 data_bytes = self.parse_data_content(content, format_type)
             except ValueError as e:
                 raise ValueError(f"数据帧解析错误: {e}")
+
+            # 根据方向选择帧和端口
+            if direction == "客户端→服务器":
+                send_eth = eth_frame
+                send_ip = ip_layer
+                send_src_port = src_port
+                send_dst_port = dst_port
+            else:  # 服务器→客户端
+                send_eth = eth_frame_reply
+                send_ip = ip_layer_reply
+                send_src_port = dst_port
+                send_dst_port = src_port
+
+            # 创建UDP包
+            udp_packet = send_eth / send_ip / self.packet_generator.create_udp_packet(
+                send_src_port, send_dst_port, data_bytes
+            )
+            packets.append(udp_packet)
+
+        return packets
+
+    def generate_simple_udp_packets(self, eth_frame, ip_layer, src_port, dst_port):
+        """生成简单模式的UDP数据包"""
+        packets = []
+
+        # 创建反向的以太网帧和IP层
+        eth_frame_reply = self.packet_generator.create_ethernet_frame(eth_frame.dst, eth_frame.src)
+        ip_layer_reply = self.packet_generator.create_ip_layer(
+            4 if isinstance(ip_layer, IP) else 6,
+            ip_layer.dst, ip_layer.src
+        )
+
+        # C2S数据传输
+        c2s_content = self.udp_c2s_data_var.get().strip()
+        if c2s_content:
+            # 解析转义序列
+            c2s_content = self.parse_escape_sequences(c2s_content)
+            c2s_data = c2s_content.encode('utf-8')
+
+            # 创建C2S UDP包
+            udp_packet = eth_frame / ip_layer / self.packet_generator.create_udp_packet(
+                src_port, dst_port, c2s_data
+            )
+            packets.append(udp_packet)
+
+        # S2C数据传输
+        s2c_content = self.udp_s2c_data_var.get().strip()
+        if s2c_content:
+            # 解析转义序列
+            s2c_content = self.parse_escape_sequences(s2c_content)
+            s2c_data = s2c_content.encode('utf-8')
+
+            # 创建S2C UDP包
+            udp_packet = eth_frame_reply / ip_layer_reply / self.packet_generator.create_udp_packet(
+                dst_port, src_port, s2c_data
+            )
+            packets.append(udp_packet)
+
+        return packets
+
+    def generate_advanced_udp_packets_new(self, eth_frame, ip_layer, src_port, dst_port):
+        """生成高级模式的UDP数据包（新版本）"""
+        packets = []
+
+        # 创建反向的以太网帧和IP层
+        eth_frame_reply = self.packet_generator.create_ethernet_frame(eth_frame.dst, eth_frame.src)
+        ip_layer_reply = self.packet_generator.create_ip_layer(
+            4 if isinstance(ip_layer, IP) else 6,
+            ip_layer.dst, ip_layer.src
+        )
+
+        for frame_info in self.udp_data_frames:
+            direction = frame_info['direction'].get()
+            content = frame_info['data'].get()
+            format_type = frame_info['format'].get()
+
+            if not content.strip():
+                continue
+
+            try:
+                data_bytes = self.parse_data_content(content, format_type)
+            except ValueError as e:
+                raise ValueError(f"UDP数据帧解析错误: {e}")
 
             # 根据方向选择帧和端口
             if direction == "客户端→服务器":
