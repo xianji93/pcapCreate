@@ -195,6 +195,9 @@ class PcapGeneratorGUI:
         button_frame.grid(row=row, column=0, columnspan=2, pady=(20, 0))
         row += 1
 
+        self.load_btn = ttk.Button(button_frame, text="读取PCAP文件", command=self.load_pcap)
+        self.load_btn.pack(side=tk.LEFT, padx=(0, 10))
+
         self.generate_btn = ttk.Button(button_frame, text="生成数据包", command=self.generate_packets)
         self.generate_btn.pack(side=tk.LEFT, padx=(0, 10))
 
@@ -202,7 +205,10 @@ class PcapGeneratorGUI:
         self.save_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.preview_btn = ttk.Button(button_frame, text="预览数据包", command=self.preview_packets, state=tk.DISABLED)
-        self.preview_btn.pack(side=tk.LEFT)
+        self.preview_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.edit_btn = ttk.Button(button_frame, text="编辑数据包", command=self.edit_packets, state=tk.DISABLED)
+        self.edit_btn.pack(side=tk.LEFT)
 
         # 状态显示
         self.status_var = tk.StringVar(value="就绪")
@@ -704,6 +710,7 @@ class PcapGeneratorGUI:
             self.status_var.set(f"成功生成 {len(packets)} 个数据包")
             self.save_btn.config(state=tk.NORMAL)
             self.preview_btn.config(state=tk.NORMAL)
+            self.edit_btn.config(state=tk.NORMAL)
 
             # 自动显示预览
             self.update_packet_preview()
@@ -1258,8 +1265,22 @@ class PcapGeneratorGUI:
 
         # 获取数据包详细信息
         try:
+            # 获取协议层分析
             packet_info = packet.show(dump=True)
-            hex_dump = packet.hexdump(dump=True)
+
+            # 获取十六进制转储
+            try:
+                hex_dump = packet.hexdump(dump=True)
+            except:
+                # 如果hexdump失败，手动生成十六进制显示
+                packet_bytes = bytes(packet)
+                hex_lines = []
+                for i in range(0, len(packet_bytes), 16):
+                    chunk = packet_bytes[i:i+16]
+                    hex_part = ' '.join(f'{b:02x}' for b in chunk)
+                    ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
+                    hex_lines.append(f'{i:04x}  {hex_part:<48} {ascii_part}')
+                hex_dump = '\n'.join(hex_lines)
 
             detail_text = f"数据包 #{packet_index + 1} 详细信息\n"
             detail_text += "=" * 50 + "\n\n"
@@ -1274,14 +1295,709 @@ class PcapGeneratorGUI:
             text_widget.config(state=tk.DISABLED)
 
         except Exception as e:
-            text_widget.insert(tk.END, f"无法显示数据包详细信息: {str(e)}")
-            text_widget.config(state=tk.DISABLED)
+            # 如果所有方法都失败，至少显示基本信息
+            try:
+                packet_bytes = bytes(packet)
+                basic_info = f"数据包 #{packet_index + 1} 基本信息\n"
+                basic_info += "=" * 50 + "\n\n"
+                basic_info += f"数据包长度: {len(packet_bytes)} 字节\n"
+                basic_info += f"数据包类型: {type(packet).__name__}\n\n"
+                basic_info += "原始字节数据:\n"
+                basic_info += "-" * 20 + "\n"
+
+                # 手动生成十六进制显示
+                for i in range(0, len(packet_bytes), 16):
+                    chunk = packet_bytes[i:i+16]
+                    hex_part = ' '.join(f'{b:02x}' for b in chunk)
+                    ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
+                    basic_info += f'{i:04x}  {hex_part:<48} {ascii_part}\n'
+
+                text_widget.insert(tk.END, basic_info)
+                text_widget.config(state=tk.DISABLED)
+            except Exception as e2:
+                text_widget.insert(tk.END, f"无法显示数据包详细信息: {str(e)}\n详细错误: {str(e2)}")
+                text_widget.config(state=tk.DISABLED)
 
         # 添加关闭按钮
         button_frame = ttk.Frame(detail_window)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(button_frame, text="关闭", command=detail_window.destroy).pack(side=tk.RIGHT)
+
+    def load_pcap(self):
+        """读取PCAP文件"""
+        try:
+            filename = filedialog.askopenfilename(
+                title="选择PCAP文件",
+                filetypes=[("PCAP文件", "*.pcap"), ("PCAPNG文件", "*.pcapng"), ("所有文件", "*.*")]
+            )
+
+            if filename:
+                from scapy.all import rdpcap
+
+                # 读取PCAP文件
+                packets = rdpcap(filename)
+                self.packet_generator.packets = packets
+
+                # 更新预览
+                self.update_packet_preview()
+
+                # 启用相关按钮
+                self.save_btn.config(state=tk.NORMAL)
+                self.preview_btn.config(state=tk.NORMAL)
+                self.edit_btn.config(state=tk.NORMAL)
+
+                self.status_var.set(f"成功读取 {len(packets)} 个数据包从 {os.path.basename(filename)}")
+
+        except Exception as e:
+            messagebox.showerror("读取错误", f"读取PCAP文件时发生错误：{str(e)}")
+            self.status_var.set("读取失败")
+
+    def edit_packets(self):
+        """编辑数据包"""
+        if not self.packet_generator.packets:
+            messagebox.showwarning("警告", "没有数据包可编辑")
+            return
+
+        # 创建编辑窗口
+        self.create_packet_editor()
+
+    def create_packet_editor(self):
+        """创建数据包编辑器窗口"""
+        editor_window = tk.Toplevel(self.root)
+        editor_window.title("数据包编辑器")
+        editor_window.geometry("1000x700")
+        editor_window.resizable(True, True)
+
+        # 创建主框架
+        main_frame = ttk.Frame(editor_window, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 左侧：数据包列表
+        left_frame = ttk.LabelFrame(main_frame, text="数据包列表", padding="5")
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 10))
+
+        # 数据包列表
+        packet_listbox = tk.Listbox(left_frame, width=30, height=25)
+        packet_scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=packet_listbox.yview)
+        packet_listbox.configure(yscrollcommand=packet_scrollbar.set)
+
+        packet_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        packet_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 填充数据包列表
+        for i, packet in enumerate(self.packet_generator.packets, 1):
+            info = self.analyze_packet(packet)
+            packet_listbox.insert(tk.END, f"{i:3d}. {info['protocol']} - {info['summary'][:30]}")
+
+        # 右侧：数据包编辑区域
+        right_frame = ttk.LabelFrame(main_frame, text="数据包编辑", padding="5")
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # 当前选中的数据包索引
+        self.current_packet_index = tk.IntVar(value=0)
+
+        # 绑定列表选择事件
+        def on_packet_select(event):
+            selection = packet_listbox.curselection()
+            if selection:
+                self.current_packet_index.set(selection[0])
+                self.load_packet_for_editing(right_frame, selection[0])
+
+        packet_listbox.bind('<<ListboxSelect>>', on_packet_select)
+
+        # 初始加载第一个数据包
+        if self.packet_generator.packets:
+            packet_listbox.selection_set(0)
+            self.load_packet_for_editing(right_frame, 0)
+
+        # 底部按钮
+        button_frame = ttk.Frame(editor_window)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(button_frame, text="应用修改", command=lambda: self.apply_packet_changes(right_frame)).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="重置", command=lambda: self.load_packet_for_editing(right_frame, self.current_packet_index.get())).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="关闭", command=editor_window.destroy).pack(side=tk.RIGHT)
+
+    def load_packet_for_editing(self, parent_frame, packet_index):
+        """加载数据包进行编辑"""
+        # 清空现有内容
+        for widget in parent_frame.winfo_children():
+            widget.destroy()
+
+        if packet_index >= len(self.packet_generator.packets):
+            return
+
+        packet = self.packet_generator.packets[packet_index]
+
+        # 创建滚动区域
+        canvas = tk.Canvas(parent_frame)
+        scrollbar = ttk.Scrollbar(parent_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # 存储编辑字段的引用
+        self.edit_fields = {}
+
+        # 分析数据包的各层
+        self.create_layer_editors(scrollable_frame, packet, packet_index)
+
+        # 布局
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+    def create_layer_editors(self, parent, packet, packet_index):
+        """创建各层的编辑器"""
+        from scapy.layers.inet import IP, TCP, UDP
+        from scapy.layers.inet6 import IPv6
+        from scapy.layers.l2 import Ether
+
+        layer_count = 0
+
+        # 以太网层
+        if Ether in packet:
+            self.create_ethernet_editor(parent, packet[Ether], layer_count)
+            layer_count += 1
+
+        # IP层
+        if IP in packet:
+            self.create_ipv4_editor(parent, packet[IP], layer_count)
+            layer_count += 1
+        elif IPv6 in packet:
+            self.create_ipv6_editor(parent, packet[IPv6], layer_count)
+            layer_count += 1
+
+        # 传输层
+        if TCP in packet:
+            self.create_tcp_editor(parent, packet[TCP], layer_count)
+            layer_count += 1
+        elif UDP in packet:
+            self.create_udp_editor(parent, packet[UDP], layer_count)
+            layer_count += 1
+
+        # 应用层数据
+        payload = self.get_payload_data(packet)
+        if payload:
+            self.create_payload_editor(parent, payload, layer_count)
+
+    def create_ethernet_editor(self, parent, eth_layer, layer_index):
+        """创建以太网层编辑器"""
+        frame = ttk.LabelFrame(parent, text="以太网层 (Ethernet)", padding="10")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        frame.columnconfigure(1, weight=1)
+
+        # 源MAC地址
+        ttk.Label(frame, text="源MAC地址:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        src_mac_var = tk.StringVar(value=eth_layer.src)
+        ttk.Entry(frame, textvariable=src_mac_var, width=20).grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+        self.edit_fields[f'eth_{layer_index}_src'] = src_mac_var
+
+        # 目标MAC地址
+        ttk.Label(frame, text="目标MAC地址:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=(5, 0))
+        dst_mac_var = tk.StringVar(value=eth_layer.dst)
+        ttk.Entry(frame, textvariable=dst_mac_var, width=20).grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'eth_{layer_index}_dst'] = dst_mac_var
+
+        # 类型
+        ttk.Label(frame, text="类型:").grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=(5, 0))
+        type_var = tk.StringVar(value=f"0x{eth_layer.type:04x}")
+        ttk.Entry(frame, textvariable=type_var, width=10).grid(row=2, column=1, sticky=tk.W, padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'eth_{layer_index}_type'] = type_var
+
+    def create_ipv4_editor(self, parent, ip_layer, layer_index):
+        """创建IPv4层编辑器"""
+        frame = ttk.LabelFrame(parent, text="IPv4层", padding="10")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        # 第一行：版本、头长度、服务类型、总长度
+        ttk.Label(frame, text="版本:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        version_var = tk.StringVar(value=str(ip_layer.version))
+        ttk.Entry(frame, textvariable=version_var, width=5).grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        self.edit_fields[f'ip_{layer_index}_version'] = version_var
+
+        ttk.Label(frame, text="头长度:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
+        ihl_var = tk.StringVar(value=str(ip_layer.ihl))
+        ttk.Entry(frame, textvariable=ihl_var, width=5).grid(row=0, column=3, sticky=tk.W)
+        self.edit_fields[f'ip_{layer_index}_ihl'] = ihl_var
+
+        # 第二行：服务类型、总长度
+        ttk.Label(frame, text="服务类型:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        tos_var = tk.StringVar(value=str(ip_layer.tos))
+        ttk.Entry(frame, textvariable=tos_var, width=5).grid(row=1, column=1, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_tos'] = tos_var
+
+        ttk.Label(frame, text="总长度:").grid(row=1, column=2, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        len_var = tk.StringVar(value=str(ip_layer.len))
+        ttk.Entry(frame, textvariable=len_var, width=8).grid(row=1, column=3, sticky=tk.W, pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_len'] = len_var
+
+        # 第三行：标识、标志、片偏移
+        ttk.Label(frame, text="标识:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        id_var = tk.StringVar(value=str(ip_layer.id))
+        ttk.Entry(frame, textvariable=id_var, width=8).grid(row=2, column=1, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_id'] = id_var
+
+        ttk.Label(frame, text="标志:").grid(row=2, column=2, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        flags_var = tk.StringVar(value=str(ip_layer.flags))
+        ttk.Entry(frame, textvariable=flags_var, width=5).grid(row=2, column=3, sticky=tk.W, pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_flags'] = flags_var
+
+        # 第四行：TTL、协议
+        ttk.Label(frame, text="TTL:").grid(row=3, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        ttl_var = tk.StringVar(value=str(ip_layer.ttl))
+        ttk.Entry(frame, textvariable=ttl_var, width=5).grid(row=3, column=1, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_ttl'] = ttl_var
+
+        ttk.Label(frame, text="协议:").grid(row=3, column=2, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        proto_var = tk.StringVar(value=str(ip_layer.proto))
+        ttk.Entry(frame, textvariable=proto_var, width=5).grid(row=3, column=3, sticky=tk.W, pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_proto'] = proto_var
+
+        # 第五行：源IP地址
+        ttk.Label(frame, text="源IP地址:").grid(row=4, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        src_var = tk.StringVar(value=str(ip_layer.src))
+        ttk.Entry(frame, textvariable=src_var, width=20).grid(row=4, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_src'] = src_var
+
+        # 第六行：目标IP地址
+        ttk.Label(frame, text="目标IP地址:").grid(row=5, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        dst_var = tk.StringVar(value=str(ip_layer.dst))
+        ttk.Entry(frame, textvariable=dst_var, width=20).grid(row=5, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'ip_{layer_index}_dst'] = dst_var
+
+    def create_ipv6_editor(self, parent, ipv6_layer, layer_index):
+        """创建IPv6层编辑器"""
+        frame = ttk.LabelFrame(parent, text="IPv6层", padding="10")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        # 版本、流量类别、流标签
+        ttk.Label(frame, text="版本:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        version_var = tk.StringVar(value=str(ipv6_layer.version))
+        ttk.Entry(frame, textvariable=version_var, width=5).grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        self.edit_fields[f'ipv6_{layer_index}_version'] = version_var
+
+        ttk.Label(frame, text="流量类别:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
+        tc_var = tk.StringVar(value=str(ipv6_layer.tc))
+        ttk.Entry(frame, textvariable=tc_var, width=5).grid(row=0, column=3, sticky=tk.W)
+        self.edit_fields[f'ipv6_{layer_index}_tc'] = tc_var
+
+        # 载荷长度、下一个头部、跳数限制
+        ttk.Label(frame, text="载荷长度:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        plen_var = tk.StringVar(value=str(ipv6_layer.plen))
+        ttk.Entry(frame, textvariable=plen_var, width=8).grid(row=1, column=1, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        self.edit_fields[f'ipv6_{layer_index}_plen'] = plen_var
+
+        ttk.Label(frame, text="跳数限制:").grid(row=1, column=2, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        hlim_var = tk.StringVar(value=str(ipv6_layer.hlim))
+        ttk.Entry(frame, textvariable=hlim_var, width=5).grid(row=1, column=3, sticky=tk.W, pady=(5, 0))
+        self.edit_fields[f'ipv6_{layer_index}_hlim'] = hlim_var
+
+        # 源IPv6地址
+        ttk.Label(frame, text="源IPv6地址:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        src_var = tk.StringVar(value=str(ipv6_layer.src))
+        ttk.Entry(frame, textvariable=src_var, width=40).grid(row=2, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'ipv6_{layer_index}_src'] = src_var
+
+        # 目标IPv6地址
+        ttk.Label(frame, text="目标IPv6地址:").grid(row=3, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        dst_var = tk.StringVar(value=str(ipv6_layer.dst))
+        ttk.Entry(frame, textvariable=dst_var, width=40).grid(row=3, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'ipv6_{layer_index}_dst'] = dst_var
+
+    def create_tcp_editor(self, parent, tcp_layer, layer_index):
+        """创建TCP层编辑器"""
+        frame = ttk.LabelFrame(parent, text="TCP层", padding="10")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        # 源端口、目标端口
+        ttk.Label(frame, text="源端口:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        sport_var = tk.StringVar(value=str(tcp_layer.sport))
+        ttk.Entry(frame, textvariable=sport_var, width=8).grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        self.edit_fields[f'tcp_{layer_index}_sport'] = sport_var
+
+        ttk.Label(frame, text="目标端口:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
+        dport_var = tk.StringVar(value=str(tcp_layer.dport))
+        ttk.Entry(frame, textvariable=dport_var, width=8).grid(row=0, column=3, sticky=tk.W)
+        self.edit_fields[f'tcp_{layer_index}_dport'] = dport_var
+
+        # 序列号
+        ttk.Label(frame, text="序列号:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        seq_var = tk.StringVar(value=str(tcp_layer.seq))
+        ttk.Entry(frame, textvariable=seq_var, width=15).grid(row=1, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'tcp_{layer_index}_seq'] = seq_var
+
+        # 确认号
+        ttk.Label(frame, text="确认号:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        ack_var = tk.StringVar(value=str(tcp_layer.ack))
+        ttk.Entry(frame, textvariable=ack_var, width=15).grid(row=2, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
+        self.edit_fields[f'tcp_{layer_index}_ack'] = ack_var
+
+        # 窗口大小、紧急指针
+        ttk.Label(frame, text="窗口大小:").grid(row=3, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        window_var = tk.StringVar(value=str(tcp_layer.window))
+        ttk.Entry(frame, textvariable=window_var, width=8).grid(row=3, column=1, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        self.edit_fields[f'tcp_{layer_index}_window'] = window_var
+
+        ttk.Label(frame, text="紧急指针:").grid(row=3, column=2, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        urgptr_var = tk.StringVar(value=str(tcp_layer.urgptr))
+        ttk.Entry(frame, textvariable=urgptr_var, width=8).grid(row=3, column=3, sticky=tk.W, pady=(5, 0))
+        self.edit_fields[f'tcp_{layer_index}_urgptr'] = urgptr_var
+
+        # TCP标志位
+        flags_frame = ttk.LabelFrame(frame, text="TCP标志位", padding="5")
+        flags_frame.grid(row=4, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(10, 0))
+
+        # 创建标志位复选框
+        self.tcp_flags = {}
+        flag_names = [('FIN', 0x01), ('SYN', 0x02), ('RST', 0x04), ('PSH', 0x08), ('ACK', 0x10), ('URG', 0x20)]
+
+        for i, (flag_name, flag_value) in enumerate(flag_names):
+            var = tk.BooleanVar(value=bool(tcp_layer.flags & flag_value))
+            ttk.Checkbutton(flags_frame, text=flag_name, variable=var).grid(row=0, column=i, padx=10, sticky=tk.W)
+            self.tcp_flags[f'tcp_{layer_index}_{flag_name.lower()}'] = var
+
+    def create_udp_editor(self, parent, udp_layer, layer_index):
+        """创建UDP层编辑器"""
+        frame = ttk.LabelFrame(parent, text="UDP层", padding="10")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        # 源端口、目标端口
+        ttk.Label(frame, text="源端口:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        sport_var = tk.StringVar(value=str(udp_layer.sport))
+        ttk.Entry(frame, textvariable=sport_var, width=8).grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        self.edit_fields[f'udp_{layer_index}_sport'] = sport_var
+
+        ttk.Label(frame, text="目标端口:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
+        dport_var = tk.StringVar(value=str(udp_layer.dport))
+        ttk.Entry(frame, textvariable=dport_var, width=8).grid(row=0, column=3, sticky=tk.W)
+        self.edit_fields[f'udp_{layer_index}_dport'] = dport_var
+
+        # 长度、校验和
+        ttk.Label(frame, text="长度:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        len_var = tk.StringVar(value=str(udp_layer.len))
+        ttk.Entry(frame, textvariable=len_var, width=8).grid(row=1, column=1, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        self.edit_fields[f'udp_{layer_index}_len'] = len_var
+
+        ttk.Label(frame, text="校验和:").grid(row=1, column=2, sticky=tk.W, padx=(0, 5), pady=(5, 0))
+        chksum_var = tk.StringVar(value=str(udp_layer.chksum))
+        ttk.Entry(frame, textvariable=chksum_var, width=8).grid(row=1, column=3, sticky=tk.W, pady=(5, 0))
+        self.edit_fields[f'udp_{layer_index}_chksum'] = chksum_var
+
+    def create_payload_editor(self, parent, payload_data, layer_index):
+        """创建应用层数据编辑器"""
+        frame = ttk.LabelFrame(parent, text="应用层数据 (Payload)", padding="10")
+        frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        # 数据格式选择
+        format_frame = ttk.Frame(frame)
+        format_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+
+        ttk.Label(format_frame, text="数据格式:").pack(side=tk.LEFT, padx=(0, 10))
+
+        format_var = tk.StringVar(value="十六进制")
+        format_combo = ttk.Combobox(format_frame, textvariable=format_var,
+                                   values=["十六进制", "ASCII", "UTF-8"],
+                                   state="readonly", width=10)
+        format_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.edit_fields[f'payload_{layer_index}_format'] = format_var
+
+        # 数据长度显示
+        length_label = ttk.Label(format_frame, text=f"长度: {len(payload_data)} 字节")
+        length_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 数据编辑区域
+        text_frame = ttk.Frame(frame)
+        text_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+
+        # 文本编辑器
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, height=10, font=("Consolas", 10))
+        text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=text_scrollbar.set)
+
+        text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        text_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+        # 初始化数据显示
+        self.update_payload_display(text_widget, payload_data, "十六进制")
+        self.edit_fields[f'payload_{layer_index}_text'] = text_widget
+        self.edit_fields[f'payload_{layer_index}_original'] = payload_data
+
+        # 绑定格式切换事件
+        def on_format_change(event):
+            # 获取当前格式（切换前的格式）
+            old_format = getattr(on_format_change, 'last_format', "十六进制")
+            # 从当前显示获取数据
+            current_data = self.get_payload_from_text(text_widget, old_format)
+            # 获取新格式
+            new_format = format_var.get()
+            # 更新显示
+            self.update_payload_display(text_widget, current_data, new_format)
+            # 记录当前格式，供下次切换使用
+            on_format_change.last_format = new_format
+
+        # 初始化格式记录
+        on_format_change.last_format = "十六进制"
+
+        format_combo.bind('<<ComboboxSelected>>', on_format_change)
+
+    def get_payload_data(self, packet):
+        """获取数据包的应用层数据"""
+        from scapy.layers.inet import IP, TCP, UDP
+        from scapy.layers.inet6 import IPv6
+        from scapy.layers.l2 import Ether
+
+        # 逐层剥离，找到最内层的数据
+        current = packet
+        while current:
+            if hasattr(current, 'payload') and current.payload:
+                if isinstance(current.payload, (bytes, str)):
+                    return current.payload if isinstance(current.payload, bytes) else current.payload.encode()
+                elif hasattr(current.payload, '__class__') and current.payload.__class__.__name__ == 'Raw':
+                    return bytes(current.payload)
+                else:
+                    current = current.payload
+            else:
+                break
+
+        return b''
+
+    def update_payload_display(self, text_widget, data, format_type):
+        """更新应用层数据显示"""
+        text_widget.config(state=tk.NORMAL)
+        text_widget.delete(1.0, tk.END)
+
+        if not data:
+            text_widget.insert(tk.END, "")
+            text_widget.config(state=tk.NORMAL)
+            return
+
+        try:
+            if format_type == "十六进制":
+                hex_str = data.hex().upper()
+                # 格式化为每行16字节，每2字节一个空格
+                formatted = ""
+                for i in range(0, len(hex_str), 32):  # 32个字符 = 16字节
+                    line = hex_str[i:i+32]
+                    formatted_line = " ".join([line[j:j+2] for j in range(0, len(line), 2)])
+                    formatted += formatted_line
+                    if i + 32 < len(hex_str):  # 不是最后一行
+                        formatted += "\n"
+                text_widget.insert(tk.END, formatted)
+
+            elif format_type == "ASCII":
+                ascii_str = ""
+                for byte in data:
+                    if 32 <= byte <= 126:  # 可打印ASCII字符
+                        ascii_str += chr(byte)
+                    else:
+                        ascii_str += f"\\x{byte:02X}"
+                text_widget.insert(tk.END, ascii_str)
+
+            elif format_type == "UTF-8":
+                utf8_str = data.decode('utf-8', errors='replace')
+                text_widget.insert(tk.END, utf8_str)
+
+        except Exception as e:
+            error_msg = f"显示错误 ({format_type}): {str(e)}"
+            text_widget.insert(tk.END, error_msg)
+            print(f"显示数据错误: {e}, 数据长度: {len(data)}, 格式: {format_type}")
+
+        text_widget.config(state=tk.NORMAL)  # 保持可编辑
+
+    def get_payload_from_text(self, text_widget, format_type):
+        """从文本编辑器获取应用层数据"""
+        content = text_widget.get(1.0, tk.END).strip()
+
+        if not content:
+            return b''
+
+        if format_type == "十六进制":
+            try:
+                # 移除空格、换行符和其他分隔符
+                hex_str = content.replace(" ", "").replace("\n", "").replace("\r", "").replace(":", "").replace("-", "")
+                # 确保是偶数长度
+                if len(hex_str) % 2 != 0:
+                    hex_str = "0" + hex_str
+                return bytes.fromhex(hex_str)
+            except ValueError as e:
+                print(f"十六进制解析错误: {e}, 内容: {repr(content)}")
+                return b''
+
+        elif format_type == "ASCII":
+            # 处理转义序列
+            result = b''
+            i = 0
+            while i < len(content):
+                if i + 3 < len(content) and content[i:i+2] == '\\x':
+                    try:
+                        byte_val = int(content[i+2:i+4], 16)
+                        result += bytes([byte_val])
+                        i += 4
+                    except ValueError:
+                        result += content[i].encode('ascii', errors='ignore')
+                        i += 1
+                else:
+                    result += content[i].encode('ascii', errors='ignore')
+                    i += 1
+            return result
+
+        elif format_type == "UTF-8":
+            try:
+                return content.encode('utf-8', errors='replace')
+            except Exception as e:
+                print(f"UTF-8编码错误: {e}")
+                return content.encode('utf-8', errors='ignore')
+
+        return b''
+
+    def apply_packet_changes(self, editor_frame):
+        """应用数据包修改"""
+        try:
+            packet_index = self.current_packet_index.get()
+            if packet_index >= len(self.packet_generator.packets):
+                messagebox.showerror("错误", "无效的数据包索引")
+                return
+
+            # 重构数据包
+            new_packet = self.rebuild_packet(packet_index)
+
+            if new_packet:
+                # 更新数据包
+                self.packet_generator.packets[packet_index] = new_packet
+
+                # 更新主预览列表
+                self.update_packet_preview()
+
+                messagebox.showinfo("成功", "数据包修改已应用")
+            else:
+                messagebox.showerror("错误", "重构数据包失败")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"应用修改时发生错误：{str(e)}")
+
+    def rebuild_packet(self, packet_index):
+        """重构数据包"""
+        try:
+            from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw
+
+            original_packet = self.packet_generator.packets[packet_index]
+            layers = []
+
+            # 重构以太网层
+            if Ether in original_packet:
+                eth_fields = {}
+                for key, var in self.edit_fields.items():
+                    if key.startswith('eth_0_'):
+                        field_name = key.split('_')[-1]
+                        if field_name == 'type':
+                            eth_fields[field_name] = int(var.get(), 16)
+                        else:
+                            eth_fields[field_name] = var.get()
+
+                layers.append(Ether(**eth_fields))
+
+            # 重构IP层
+            if IP in original_packet:
+                ip_fields = {}
+                for key, var in self.edit_fields.items():
+                    if key.startswith('ip_1_'):
+                        field_name = key.split('_')[-1]
+                        if field_name in ['version', 'ihl', 'tos', 'len', 'id', 'flags', 'ttl', 'proto']:
+                            ip_fields[field_name] = int(var.get())
+                        else:
+                            ip_fields[field_name] = var.get()
+
+                layers.append(IP(**ip_fields))
+
+            elif IPv6 in original_packet:
+                ipv6_fields = {}
+                for key, var in self.edit_fields.items():
+                    if key.startswith('ipv6_1_'):
+                        field_name = key.split('_')[-1]
+                        if field_name in ['version', 'tc', 'plen', 'hlim']:
+                            ipv6_fields[field_name] = int(var.get())
+                        else:
+                            ipv6_fields[field_name] = var.get()
+
+                layers.append(IPv6(**ipv6_fields))
+
+            # 重构传输层
+            if TCP in original_packet:
+                tcp_fields = {}
+                for key, var in self.edit_fields.items():
+                    if key.startswith('tcp_2_'):
+                        field_name = key.split('_')[-1]
+                        if field_name in ['sport', 'dport', 'seq', 'ack', 'window', 'urgptr']:
+                            tcp_fields[field_name] = int(var.get())
+
+                # 处理TCP标志位
+                flags = 0
+                flag_mapping = {'fin': 0x01, 'syn': 0x02, 'rst': 0x04, 'psh': 0x08, 'ack': 0x10, 'urg': 0x20}
+                for flag_name, flag_value in flag_mapping.items():
+                    if f'tcp_2_{flag_name}' in self.tcp_flags and self.tcp_flags[f'tcp_2_{flag_name}'].get():
+                        flags |= flag_value
+
+                tcp_fields['flags'] = flags
+                layers.append(TCP(**tcp_fields))
+
+            elif UDP in original_packet:
+                udp_fields = {}
+                for key, var in self.edit_fields.items():
+                    if key.startswith('udp_2_'):
+                        field_name = key.split('_')[-1]
+                        if field_name in ['sport', 'dport', 'len', 'chksum']:
+                            udp_fields[field_name] = int(var.get())
+
+                layers.append(UDP(**udp_fields))
+
+            # 重构应用层数据
+            payload_text_key = None
+            payload_format_key = None
+            for key in self.edit_fields.keys():
+                if key.endswith('_text'):
+                    payload_text_key = key
+                elif key.endswith('_format'):
+                    payload_format_key = key
+
+            if payload_text_key and payload_format_key:
+                text_widget = self.edit_fields[payload_text_key]
+                format_var = self.edit_fields[payload_format_key]
+                payload_data = self.get_payload_from_text(text_widget, format_var.get())
+
+                if payload_data:
+                    layers.append(Raw(load=payload_data))
+
+            # 组合所有层
+            if layers:
+                packet = layers[0]
+                for layer in layers[1:]:
+                    packet = packet / layer
+                return packet
+
+            return None
+
+        except Exception as e:
+            print(f"重构数据包错误: {e}")
+            return None
 
     def run(self):
         """运行GUI应用"""
