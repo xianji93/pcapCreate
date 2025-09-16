@@ -10,6 +10,7 @@ import os
 import sys
 import random
 
+
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -676,8 +677,16 @@ class PcapGeneratorGUI:
                 ip_kwargs['ttl'] = int(self.ttl_var.get())
                 ip_kwargs['tos'] = int(self.tos_var.get())
             else:
-                ip_kwargs['hlim'] = int(self.hlim_var.get())
-                ip_kwargs['tc'] = int(self.tc_var.get())
+                # 确保IPv6参数存在，如果不存在则使用默认值
+                if hasattr(self, 'hlim_var'):
+                    ip_kwargs['hlim'] = int(self.hlim_var.get())
+                else:
+                    ip_kwargs['hlim'] = 64  # 默认跳数限制
+
+                if hasattr(self, 'tc_var'):
+                    ip_kwargs['tc'] = int(self.tc_var.get())
+                else:
+                    ip_kwargs['tc'] = 0  # 默认流量类别
 
             ip_layer = self.packet_generator.create_ip_layer(ip_version, src_ip, dst_ip, **ip_kwargs)
 
@@ -1107,6 +1116,32 @@ class PcapGeneratorGUI:
             from scapy.layers.inet6 import IPv6
             from scapy.layers.l2 import Ether
 
+            # 添加调试信息
+            debug_analyze = True  # 设置为True启用调试
+            if debug_analyze:
+                print(f"    [analyze_packet] 分析数据包: {type(packet)}")
+                try:
+                    # 使用packet.show()来获取层信息
+                    import io
+                    import sys
+                    old_stdout = sys.stdout
+                    sys.stdout = buffer = io.StringIO()
+                    packet.show()
+                    sys.stdout = old_stdout
+                    packet_info = buffer.getvalue()
+                    print(f"    [analyze_packet] 数据包结构:\n{packet_info}")
+                except:
+                    print(f"    [analyze_packet] 无法获取层信息")
+
+                if IP in packet:
+                    print(f"    [analyze_packet] 发现IPv4层: {packet[IP].src} → {packet[IP].dst}")
+                if IPv6 in packet:
+                    print(f"    [analyze_packet] 发现IPv6层: {packet[IPv6].src} → {packet[IPv6].dst}")
+
+                # 检查数据包的实际内容
+                print(f"    [analyze_packet] 数据包摘要: {packet.summary()}")
+                print(f"    [analyze_packet] 数据包ID: {id(packet)}")
+
             info = {
                 'protocol': 'Unknown',
                 'src_addr': '',
@@ -1121,8 +1156,42 @@ class PcapGeneratorGUI:
                 info['src_addr'] = eth.src
                 info['dst_addr'] = eth.dst
 
-            # 分析IP层
-            if IP in packet:
+            # 分析IP层 - 优先检查IPv6
+            if IPv6 in packet:
+                ipv6 = packet[IPv6]
+                info['src_addr'] = f"{info['src_addr']} ({ipv6.src})"
+                info['dst_addr'] = f"{info['dst_addr']} ({ipv6.dst})"
+
+                if TCP in packet:
+                    tcp = packet[TCP]
+                    info['protocol'] = 'IPv6 TCP'  # 明确标识为IPv6 TCP
+                    info['src_addr'] += f":{tcp.sport}"
+                    info['dst_addr'] += f":{tcp.dport}"
+
+                    flags = []
+                    if tcp.flags & 0x01: flags.append('FIN')
+                    if tcp.flags & 0x02: flags.append('SYN')
+                    if tcp.flags & 0x04: flags.append('RST')
+                    if tcp.flags & 0x08: flags.append('PSH')
+                    if tcp.flags & 0x10: flags.append('ACK')
+                    if tcp.flags & 0x20: flags.append('URG')
+
+                    flag_str = ','.join(flags) if flags else 'None'
+                    data_len = len(tcp.payload) if tcp.payload else 0
+                    info['summary'] = f"Flags=[{flag_str}] Seq={tcp.seq} Ack={tcp.ack} Len={data_len}"
+
+                elif UDP in packet:
+                    udp = packet[UDP]
+                    info['protocol'] = 'IPv6 UDP'  # 明确标识为IPv6 UDP
+                    info['src_addr'] += f":{udp.sport}"
+                    info['dst_addr'] += f":{udp.dport}"
+
+                    data_len = len(udp.payload) if udp.payload else 0
+                    info['summary'] = f"Len={data_len}"
+                else:
+                    info['protocol'] = 'IPv6'  # 纯IPv6数据包
+
+            elif IP in packet:
                 ip = packet[IP]
                 info['src_addr'] = f"{info['src_addr']} ({ip.src})"
                 info['dst_addr'] = f"{info['dst_addr']} ({ip.dst})"
@@ -1130,7 +1199,7 @@ class PcapGeneratorGUI:
                 # 分析传输层
                 if TCP in packet:
                     tcp = packet[TCP]
-                    info['protocol'] = 'TCP'
+                    info['protocol'] = 'IPv4 TCP'  # 明确标识为IPv4 TCP
                     info['src_addr'] += f":{tcp.sport}"
                     info['dst_addr'] += f":{tcp.dport}"
 
@@ -1149,44 +1218,14 @@ class PcapGeneratorGUI:
 
                 elif UDP in packet:
                     udp = packet[UDP]
-                    info['protocol'] = 'UDP'
+                    info['protocol'] = 'IPv4 UDP'  # 明确标识为IPv4 UDP
                     info['src_addr'] += f":{udp.sport}"
                     info['dst_addr'] += f":{udp.dport}"
 
                     data_len = len(udp.payload) if udp.payload else 0
                     info['summary'] = f"Len={data_len}"
-
-            elif IPv6 in packet:
-                ipv6 = packet[IPv6]
-                info['src_addr'] = f"{info['src_addr']} ({ipv6.src})"
-                info['dst_addr'] = f"{info['dst_addr']} ({ipv6.dst})"
-
-                if TCP in packet:
-                    tcp = packet[TCP]
-                    info['protocol'] = 'TCP'
-                    info['src_addr'] += f":{tcp.sport}"
-                    info['dst_addr'] += f":{tcp.dport}"
-
-                    flags = []
-                    if tcp.flags & 0x01: flags.append('FIN')
-                    if tcp.flags & 0x02: flags.append('SYN')
-                    if tcp.flags & 0x04: flags.append('RST')
-                    if tcp.flags & 0x08: flags.append('PSH')
-                    if tcp.flags & 0x10: flags.append('ACK')
-                    if tcp.flags & 0x20: flags.append('URG')
-
-                    flag_str = ','.join(flags) if flags else 'None'
-                    data_len = len(tcp.payload) if tcp.payload else 0
-                    info['summary'] = f"Flags=[{flag_str}] Seq={tcp.seq} Ack={tcp.ack} Len={data_len}"
-
-                elif UDP in packet:
-                    udp = packet[UDP]
-                    info['protocol'] = 'UDP'
-                    info['src_addr'] += f":{udp.sport}"
-                    info['dst_addr'] += f":{udp.dport}"
-
-                    data_len = len(udp.payload) if udp.payload else 0
-                    info['summary'] = f"Len={data_len}"
+                else:
+                    info['protocol'] = 'IPv4'  # 纯IPv4数据包
 
             return info
 
@@ -1201,17 +1240,33 @@ class PcapGeneratorGUI:
 
     def update_packet_preview(self):
         """更新数据包预览列表"""
+        print("=== 更新主窗口数据包预览 ===")
+        print(f"当前数据包总数: {len(self.packet_generator.packets)}")
+
         # 清空现有项目
         for item in self.packet_tree.get_children():
             self.packet_tree.delete(item)
 
         if not self.packet_generator.packets:
+            print("没有数据包可显示")
             return
 
-        # 添加数据包信息
-        for i, packet in enumerate(self.packet_generator.packets, 1):
-            info = self.analyze_packet(packet)
+        # 显示前5个数据包的详细信息
+        for i, packet in enumerate(self.packet_generator.packets[:5], 1):
+            # 添加详细调试信息
+            from scapy.layers.inet import IP
+            from scapy.layers.inet6 import IPv6
 
+            print(f"  [主窗口预览] 数据包 {i} 调试:")
+            print(f"    类型: {type(packet)}")
+            print(f"    包含IPv4: {IP in packet}")
+            print(f"    包含IPv6: {IPv6 in packet}")
+            if IP in packet:
+                print(f"    IPv4地址: {packet[IP].src} → {packet[IP].dst}")
+            if IPv6 in packet:
+                print(f"    IPv6地址: {packet[IPv6].src} → {packet[IPv6].dst}")
+
+            info = self.analyze_packet(packet)
             self.packet_tree.insert('', 'end', values=(
                 i,
                 info['protocol'],
@@ -1220,6 +1275,23 @@ class PcapGeneratorGUI:
                 info['length'],
                 info['summary']
             ))
+            print(f"    分析结果: {info['protocol']} - {info['src_addr']} → {info['dst_addr']}")
+
+        # 添加剩余数据包但不打印详细信息
+        if len(self.packet_generator.packets) > 5:
+            for i, packet in enumerate(self.packet_generator.packets[5:], 6):
+                info = self.analyze_packet(packet)
+                self.packet_tree.insert('', 'end', values=(
+                    i,
+                    info['protocol'],
+                    info['src_addr'],
+                    info['dst_addr'],
+                    info['length'],
+                    info['summary']
+                ))
+            print(f"  ... 还有 {len(self.packet_generator.packets) - 5} 个数据包")
+
+        print("=== 主窗口数据包预览更新完成 ===")
 
     def preview_packets(self):
         """预览数据包按钮点击事件"""
@@ -1337,7 +1409,8 @@ class PcapGeneratorGUI:
 
                 # 读取PCAP文件
                 packets = rdpcap(filename)
-                self.packet_generator.packets = packets
+                # 将PacketList转换为普通列表以支持项目赋值
+                self.packet_generator.packets = list(packets)
 
                 # 更新预览
                 self.update_packet_preview()
@@ -1385,10 +1458,52 @@ class PcapGeneratorGUI:
         packet_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         packet_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 填充数据包列表
-        for i, packet in enumerate(self.packet_generator.packets, 1):
-            info = self.analyze_packet(packet)
-            packet_listbox.insert(tk.END, f"{i:3d}. {info['protocol']} - {info['summary'][:30]}")
+        # 存储编辑器窗口的引用，以便后续更新
+        self.editor_window = editor_window
+        self.editor_packet_listbox = packet_listbox
+
+        # 定义刷新数据包列表的函数
+        def refresh_packet_list():
+            """刷新数据包列表"""
+            print("=== 刷新编辑器数据包列表 ===")
+            print(f"当前数据包总数: {len(self.packet_generator.packets)}")
+
+            packet_listbox.delete(0, tk.END)
+
+            # 显示前5个数据包的详细信息
+            for i, packet in enumerate(self.packet_generator.packets[:5], 1):
+                # 添加详细调试信息
+                from scapy.layers.inet import IP
+                from scapy.layers.inet6 import IPv6
+
+                print(f"  [编辑器刷新] 数据包 {i} 调试:")
+                print(f"    类型: {type(packet)}")
+                print(f"    包含IPv4: {IP in packet}")
+                print(f"    包含IPv6: {IPv6 in packet}")
+                if IP in packet:
+                    print(f"    IPv4地址: {packet[IP].src} → {packet[IP].dst}")
+                if IPv6 in packet:
+                    print(f"    IPv6地址: {packet[IPv6].src} → {packet[IPv6].dst}")
+
+                info = self.analyze_packet(packet)
+                packet_listbox.insert(tk.END, f"{i:3d}. {info['protocol']} - {info['summary'][:30]}")
+                print(f"    分析结果: {info['protocol']} - {info['src_addr']} → {info['dst_addr']}")
+
+            # 如果有更多数据包，继续添加但不打印详细信息
+            if len(self.packet_generator.packets) > 5:
+                for i, packet in enumerate(self.packet_generator.packets[5:], 6):
+                    info = self.analyze_packet(packet)
+                    packet_listbox.insert(tk.END, f"{i:3d}. {info['protocol']} - {info['summary'][:30]}")
+
+                print(f"  ... 还有 {len(self.packet_generator.packets) - 5} 个数据包")
+
+            print("=== 编辑器数据包列表刷新完成 ===")
+
+        # 存储刷新函数的引用
+        self.refresh_editor_packet_list = refresh_packet_list
+
+        # 初始填充数据包列表
+        refresh_packet_list()
 
         # 右侧：数据包编辑区域
         right_frame = ttk.LabelFrame(main_frame, text="数据包编辑", padding="5")
@@ -1417,6 +1532,7 @@ class PcapGeneratorGUI:
 
         ttk.Button(button_frame, text="应用修改", command=lambda: self.apply_packet_changes(right_frame)).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(button_frame, text="重置", command=lambda: self.load_packet_for_editing(right_frame, self.current_packet_index.get())).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="简单IP转换", command=lambda: self.simple_ip_conversion_dialog(editor_window)).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(button_frame, text="关闭", command=editor_window.destroy).pack(side=tk.RIGHT)
 
     def load_packet_for_editing(self, parent_frame, packet_index):
@@ -1991,6 +2107,9 @@ class PcapGeneratorGUI:
                 packet = layers[0]
                 for layer in layers[1:]:
                     packet = packet / layer
+
+                # 重新计算长度字段和校验和
+                packet = self.recalculate_packet_fields(packet)
                 return packet
 
             return None
@@ -1998,6 +2117,282 @@ class PcapGeneratorGUI:
         except Exception as e:
             print(f"重构数据包错误: {e}")
             return None
+
+    def recalculate_packet_fields(self, packet):
+        """重新计算数据包的长度字段和校验和"""
+        try:
+            from scapy.all import IP, IPv6, TCP, UDP, Raw
+
+            print(f"🔧 开始重新计算数据包字段...")
+
+            # 获取载荷大小
+            payload_size = 0
+            if Raw in packet:
+                payload_size = len(packet[Raw].load)
+                print(f"📦 应用层数据大小: {payload_size} 字节")
+
+            # 重新计算UDP长度
+            if UDP in packet:
+                udp_layer = packet[UDP]
+                # UDP长度 = UDP头部(8字节) + 数据长度
+                new_udp_length = 8 + payload_size
+                print(f"🔄 重新计算UDP长度: {udp_layer.len} → {new_udp_length}")
+                udp_layer.len = new_udp_length
+
+                # 删除UDP校验和，让Scapy重新计算
+                if hasattr(udp_layer, 'chksum'):
+                    del udp_layer.chksum
+                    print(f"🔄 删除UDP校验和，将重新计算")
+
+            # 重新计算IP长度
+            if IP in packet:
+                ip_layer = packet[IP]
+                # 计算IP层以下所有数据的总长度
+                transport_and_payload_size = 0
+
+                if UDP in packet:
+                    transport_and_payload_size = 8 + payload_size  # UDP头部 + 数据
+                elif TCP in packet:
+                    # TCP头部通常是20字节（不考虑选项）
+                    transport_and_payload_size = 20 + payload_size
+
+                # IP总长度 = IP头部(20字节) + 传输层头部 + 数据
+                new_ip_length = 20 + transport_and_payload_size
+                print(f"🔄 重新计算IPv4长度: {ip_layer.len} → {new_ip_length}")
+                ip_layer.len = new_ip_length
+
+                # 删除IP校验和，让Scapy重新计算
+                if hasattr(ip_layer, 'chksum'):
+                    del ip_layer.chksum
+                    print(f"🔄 删除IPv4校验和，将重新计算")
+
+            elif IPv6 in packet:
+                ipv6_layer = packet[IPv6]
+                # 计算IPv6载荷长度（不包括IPv6头部的40字节）
+                transport_and_payload_size = 0
+
+                if UDP in packet:
+                    transport_and_payload_size = 8 + payload_size  # UDP头部 + 数据
+                elif TCP in packet:
+                    transport_and_payload_size = 20 + payload_size  # TCP头部 + 数据
+
+                print(f"🔄 重新计算IPv6载荷长度: {ipv6_layer.plen} → {transport_and_payload_size}")
+                ipv6_layer.plen = transport_and_payload_size
+
+            # 删除传输层校验和，让Scapy重新计算
+            if TCP in packet:
+                tcp_layer = packet[TCP]
+                if hasattr(tcp_layer, 'chksum'):
+                    del tcp_layer.chksum
+                    print(f"🔄 删除TCP校验和，将重新计算")
+
+            # 重新构建数据包以触发校验和计算
+            print(f"🔄 重新构建数据包以触发校验和计算...")
+            rebuilt_packet = packet.__class__(bytes(packet))
+
+            print(f"✅ 数据包字段重新计算完成")
+            return rebuilt_packet
+
+        except Exception as e:
+            print(f"❌ 重新计算数据包字段时发生错误: {e}")
+            return packet  # 返回原始数据包
+
+    def simple_ip_conversion_dialog(self, parent_window):
+        """简单IP转换对话框"""
+        dialog = tk.Toplevel(parent_window)
+        dialog.title("IPv4 → IPv6 转换工具")
+
+        # 获取屏幕尺寸
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+
+        # 设置对话框尺寸（适应不同分辨率）
+        dialog_width = min(600, int(screen_width * 0.4))
+        dialog_height = min(500, int(screen_height * 0.6))
+
+        # 计算居中位置
+        x = (screen_width - dialog_width) // 2
+        y = (screen_height - dialog_height) // 2
+
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        dialog.resizable(True, True)  # 允许调整大小
+        dialog.minsize(500, 400)  # 设置最小尺寸
+        dialog.transient(parent_window)
+        dialog.grab_set()
+
+        # 创建主框架
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 标题和说明
+        title_label = ttk.Label(main_frame, text="🔄 IPv4 到 IPv6 转换", font=("Arial", 12, "bold"))
+        title_label.pack(pady=(0, 8))
+
+        info_label = ttk.Label(main_frame, text="将所有IPv4数据包转换为IPv6格式", font=("Arial", 9))
+        info_label.pack(pady=(0, 15))
+
+        # IPv6地址设置
+        addr_frame = ttk.LabelFrame(main_frame, text="IPv6地址设置", padding="8")
+        addr_frame.pack(fill=tk.X, pady=(0, 15))
+
+        # 配置网格权重
+        addr_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(addr_frame, text="源IPv6地址:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        src_ipv6_var = tk.StringVar(value="2001:db8::1")
+        src_entry = ttk.Entry(addr_frame, textvariable=src_ipv6_var)
+        src_entry.grid(row=0, column=1, sticky=tk.EW, padx=(8, 0), pady=3)
+
+        ttk.Label(addr_frame, text="目标IPv6地址:").grid(row=1, column=0, sticky=tk.W, pady=3)
+        dst_ipv6_var = tk.StringVar(value="2001:db8::2")
+        dst_entry = ttk.Entry(addr_frame, textvariable=dst_ipv6_var)
+        dst_entry.grid(row=1, column=1, sticky=tk.EW, padx=(8, 0), pady=3)
+
+        # 状态显示
+        status_frame = ttk.LabelFrame(main_frame, text="转换状态", padding="8")
+        status_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+
+        # 创建文本框和滚动条的容器
+        text_container = ttk.Frame(status_frame)
+        text_container.pack(fill=tk.BOTH, expand=True)
+
+        status_text = tk.Text(text_container, height=8, wrap=tk.WORD, font=("Consolas", 9))
+        status_scrollbar = ttk.Scrollbar(text_container, orient=tk.VERTICAL, command=status_text.yview)
+        status_text.configure(yscrollcommand=status_scrollbar.set)
+
+        status_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        status_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def update_status(message):
+            status_text.insert(tk.END, message + "\n")
+            status_text.see(tk.END)
+            status_text.update()
+
+        def simple_convert():
+            """执行简单的IPv4到IPv6转换"""
+            try:
+                update_status("开始转换...")
+
+                if not self.packet_generator.packets:
+                    update_status("错误：没有数据包可转换")
+                    return
+
+                src_ip = src_ipv6_var.get().strip()
+                dst_ip = dst_ipv6_var.get().strip()
+
+                if not src_ip or not dst_ip:
+                    update_status("错误：请输入有效的IPv6地址")
+                    return
+
+                update_status(f"转换参数: {src_ip} → {dst_ip}")
+
+                from scapy.layers.inet import IP
+                from scapy.layers.inet6 import IPv6
+                from scapy.layers.l2 import Ether
+
+                converted_count = 0
+                total_packets = len(self.packet_generator.packets)
+
+                # 创建新的数据包列表
+                new_packets = []
+
+                for i, packet in enumerate(self.packet_generator.packets):
+                    if IP in packet:
+                        # 创建新的IPv6数据包
+                        try:
+                            # 获取原始信息
+                            original_ip = packet[IP]
+
+                            # 创建新的以太网层
+                            if Ether in packet:
+                                eth = packet[Ether]
+                                new_eth = Ether(src=eth.src, dst=eth.dst, type=0x86DD)  # IPv6
+                            else:
+                                new_eth = None
+
+                            # 创建IPv6层
+                            new_ipv6 = IPv6(src=src_ip, dst=dst_ip, hlim=64)
+
+                            # 复制传输层
+                            if original_ip.payload:
+                                new_ipv6.payload = original_ip.payload
+
+                            # 构建新数据包
+                            if new_eth:
+                                new_packet = new_eth / new_ipv6
+                            else:
+                                new_packet = new_ipv6
+
+                            new_packets.append(new_packet)
+                            converted_count += 1
+
+                            if (i + 1) % 100 == 0:
+                                update_status(f"已转换 {i + 1}/{total_packets} 个数据包")
+
+                        except Exception as e:
+                            update_status(f"转换数据包 {i+1} 失败: {e}")
+                            new_packets.append(packet)  # 保留原始数据包
+                    else:
+                        new_packets.append(packet)  # 非IPv4数据包保持不变
+
+                # 替换数据包列表
+                self.packet_generator.packets = new_packets
+
+                update_status(f"转换完成！成功转换 {converted_count} 个数据包")
+
+                # 验证结果
+                ipv6_count = sum(1 for p in new_packets if IPv6 in p)
+                ipv4_count = sum(1 for p in new_packets if IP in p)
+                update_status(f"验证结果: {ipv6_count} IPv6, {ipv4_count} IPv4")
+
+                # 更新界面
+                self.update_packet_preview()
+                if hasattr(self, 'refresh_editor_packet_list'):
+                    self.refresh_editor_packet_list()
+
+            except Exception as e:
+                update_status(f"转换失败: {e}")
+
+        def save_packets():
+            """保存转换后的数据包"""
+            try:
+                filename = filedialog.asksaveasfilename(
+                    title="保存转换后的PCAP文件",
+                    defaultextension=".pcap",
+                    filetypes=[("PCAP文件", "*.pcap"), ("所有文件", "*.*")]
+                )
+
+                if filename:
+                    from scapy.utils import wrpcap
+                    wrpcap(filename, self.packet_generator.packets)
+                    update_status(f"已保存到: {filename}")
+                    messagebox.showinfo("保存成功", f"已保存 {len(self.packet_generator.packets)} 个数据包")
+
+            except Exception as e:
+                update_status(f"保存失败: {e}")
+
+        # 按钮区域
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(15, 0))
+
+        # 使用网格布局确保按钮在不同分辨率下都能正常显示
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(2, weight=1)
+
+        # 三个按钮平均分布
+        convert_btn = ttk.Button(button_frame, text="✓ 确定转换", command=simple_convert)
+        convert_btn.grid(row=0, column=0, sticky=tk.EW, padx=(0, 5))
+
+        save_btn = ttk.Button(button_frame, text="💾 保存文件", command=save_packets)
+        save_btn.grid(row=0, column=1, sticky=tk.EW, padx=5)
+
+        close_btn = ttk.Button(button_frame, text="✕ 关闭", command=dialog.destroy)
+        close_btn.grid(row=0, column=2, sticky=tk.EW, padx=(5, 0))
+
+        # 添加初始状态提示
+        update_status("准备就绪，请点击'确定转换'开始转换IPv4数据包为IPv6格式")
+
 
     def run(self):
         """运行GUI应用"""
