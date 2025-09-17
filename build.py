@@ -46,6 +46,11 @@ def build_exe():
         '--hidden-import=tkinter.ttk',
         '--hidden-import=tkinter.messagebox',
         '--hidden-import=tkinter.filedialog',
+        '--exclude-module=PyQt5',       # 排除PyQt5
+        '--exclude-module=PyQt6',       # 排除PyQt6
+        '--exclude-module=PySide2',     # 排除PySide2
+        '--exclude-module=PySide6',     # 排除PySide6
+        '--exclude-module=matplotlib.backends.qt_compat',  # 排除Qt相关后端
         '--clean',                      # 清理临时文件
         'main.py'                       # 主程序文件
     ]

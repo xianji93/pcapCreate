@@ -41,6 +41,10 @@ class PcapGeneratorGUI:
             pass
             
         self.packet_generator = PacketGenerator()
+
+        # 初始化错误信息存储
+        self.last_rebuild_error = None
+
         self.setup_ui()
         
     def setup_ui(self):
@@ -1602,6 +1606,18 @@ class PcapGeneratorGUI:
         payload = self.get_payload_data(packet)
         if payload:
             self.create_payload_editor(parent, payload, layer_count)
+            layer_count += 1
+
+        # Trailer数据 - 所有数据包都显示trailer区域
+        trailer_info = self.detect_packet_trailer(packet)
+        if not trailer_info:
+            # 如果没有检测到trailer，创建一个空的trailer信息
+            trailer_info = {
+                'type': 'none',
+                'data': b'',
+                'description': '无尾部数据'
+            }
+        self.create_trailer_editor(parent, trailer_info, layer_count)
 
     def create_ethernet_editor(self, parent, eth_layer, layer_index):
         """创建以太网层编辑器"""
@@ -1875,6 +1891,154 @@ class PcapGeneratorGUI:
 
         format_combo.bind('<<ComboboxSelected>>', on_format_change)
 
+    def create_trailer_editor(self, parent, trailer_info, layer_index):
+        """创建Trailer编辑器"""
+        # 根据是否有trailer显示不同的标题
+        if trailer_info['type'] == 'none':
+            title = "数据包尾部 (Trailer) - 点击添加尾部数据"
+        else:
+            title = f"数据包尾部 (Trailer) - {trailer_info['description']}"
+
+        frame = ttk.LabelFrame(parent, text=title, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        # Trailer类型显示
+        type_frame = ttk.Frame(frame)
+        type_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+
+        ttk.Label(type_frame, text="类型:").pack(side=tk.LEFT, padx=(0, 10))
+
+        trailer_type_var = tk.StringVar(value=trailer_info['type'])
+        type_combo = ttk.Combobox(type_frame, textvariable=trailer_type_var,
+                                 values=["none", "padding", "custom", "fcs", "vlan_tag"],
+                                 state="readonly", width=12)
+        type_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.edit_fields[f'trailer_{layer_index}_type'] = trailer_type_var
+
+        # 类型描述标签
+        type_desc_var = tk.StringVar()
+        type_desc_label = ttk.Label(type_frame, textvariable=type_desc_var, foreground="gray")
+        type_desc_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 数据格式选择
+        format_frame = ttk.Frame(frame)
+        format_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+
+        ttk.Label(format_frame, text="数据格式:").pack(side=tk.LEFT, padx=(0, 10))
+
+        format_var = tk.StringVar(value="十六进制")
+        format_combo = ttk.Combobox(format_frame, textvariable=format_var,
+                                   values=["十六进制", "ASCII", "UTF-8"],
+                                   state="readonly", width=10)
+        format_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.edit_fields[f'trailer_{layer_index}_format'] = format_var
+
+        # 数据长度显示
+        trailer_data = trailer_info['data']
+        length_label = ttk.Label(format_frame, text=f"长度: {len(trailer_data)} 字节")
+        length_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 数据编辑区域
+        text_frame = ttk.Frame(frame)
+        text_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+
+        # 文本编辑器
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, height=8, font=("Consolas", 10))
+
+        # 操作按钮（移到文本编辑器创建之后）
+        button_frame = ttk.Frame(format_frame)
+        button_frame.pack(side=tk.RIGHT)
+
+        # 清空trailer按钮
+        clear_btn = ttk.Button(button_frame, text="清空", width=8,
+                              command=lambda: self.clear_trailer_data(text_widget))
+        clear_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 生成padding按钮
+        padding_btn = ttk.Button(button_frame, text="生成填充", width=10,
+                                command=lambda: self.generate_padding_data(text_widget, format_var))
+        padding_btn.pack(side=tk.LEFT, padx=(5, 0))
+        text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=text_scrollbar.set)
+
+        text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        text_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+        # 初始化数据显示
+        self.update_payload_display(text_widget, trailer_data, "十六进制")
+        self.edit_fields[f'trailer_{layer_index}_text'] = text_widget
+        self.edit_fields[f'trailer_{layer_index}_original'] = trailer_data
+
+        # 绑定格式切换事件
+        def on_format_change(event):
+            # 获取当前格式（切换前的格式）
+            old_format = getattr(on_format_change, 'last_format', "十六进制")
+            # 从当前显示获取数据
+            current_data = self.get_payload_from_text(text_widget, old_format)
+            # 获取新格式
+            new_format = format_var.get()
+            # 更新显示
+            self.update_payload_display(text_widget, current_data, new_format)
+            # 记录当前格式，供下次切换使用
+            on_format_change.last_format = new_format
+
+        # 初始化格式记录
+        on_format_change.last_format = "十六进制"
+
+        format_combo.bind('<<ComboboxSelected>>', on_format_change)
+
+        # 绑定类型切换事件
+        def on_type_change(event):
+            trailer_type = trailer_type_var.get()
+            if trailer_type == "none":
+                type_desc_var.set("无尾部数据")
+                text_widget.delete(1.0, tk.END)
+            elif trailer_type == "padding":
+                type_desc_var.set("以太网填充数据")
+                # 如果当前没有数据，提供默认的4字节padding
+                if not text_widget.get(1.0, tk.END).strip():
+                    padding_data = b'\x00' * 4
+                    self.update_payload_display(text_widget, padding_data, format_var.get())
+            elif trailer_type == "custom":
+                type_desc_var.set("自定义尾部数据")
+            elif trailer_type == "fcs":
+                type_desc_var.set("帧校验序列")
+                # 如果当前没有数据，提供默认的4字节FCS
+                if not text_widget.get(1.0, tk.END).strip():
+                    fcs_data = b'\x00\x00\x00\x00'
+                    self.update_payload_display(text_widget, fcs_data, format_var.get())
+            elif trailer_type == "vlan_tag":
+                type_desc_var.set("VLAN标签")
+                # 如果当前没有数据，提供默认的4字节VLAN标签
+                if not text_widget.get(1.0, tk.END).strip():
+                    vlan_data = b'\x81\x00\x00\x64'  # VLAN ID 100
+                    self.update_payload_display(text_widget, vlan_data, format_var.get())
+
+        # 初始化类型描述
+        on_type_change(None)
+
+        type_combo.bind('<<ComboboxSelected>>', on_type_change)
+
+    def clear_trailer_data(self, text_widget):
+        """清空trailer数据"""
+        text_widget.delete(1.0, tk.END)
+
+    def generate_padding_data(self, text_widget, format_var):
+        """生成填充数据"""
+        # 弹出对话框询问填充长度
+        from tkinter import simpledialog
+
+        length = simpledialog.askinteger("生成填充数据", "请输入填充长度（字节）:",
+                                       minvalue=1, maxvalue=1500, initialvalue=4)
+        if length:
+            padding_data = b'\x00' * length
+            format_type = format_var.get()
+            self.update_payload_display(text_widget, padding_data, format_type)
+
     def get_payload_data(self, packet):
         """获取数据包的应用层数据"""
         from scapy.layers.inet import IP, TCP, UDP
@@ -1895,6 +2059,54 @@ class PcapGeneratorGUI:
                 break
 
         return b''
+
+    def detect_packet_trailer(self, packet):
+        """检测数据包中的trailer数据"""
+        try:
+            from scapy.layers.inet import IP, TCP, UDP
+            from scapy.layers.inet6 import IPv6
+            from scapy.layers.l2 import Ether
+
+            # 获取数据包的原始字节
+            packet_bytes = bytes(packet)
+
+            # 计算预期的数据包长度
+            expected_length = 0
+            trailer_data = b''
+
+            # 以太网帧分析
+            if Ether in packet:
+                eth_header_len = 14  # 以太网头部长度
+                expected_length += eth_header_len
+
+                # IP层分析
+                if IP in packet:
+                    ip_layer = packet[IP]
+                    ip_total_len = ip_layer.len if hasattr(ip_layer, 'len') and ip_layer.len else len(bytes(ip_layer))
+                    expected_length += ip_total_len
+                elif IPv6 in packet:
+                    ipv6_layer = packet[IPv6]
+                    ipv6_header_len = 40
+                    ipv6_payload_len = ipv6_layer.plen if hasattr(ipv6_layer, 'plen') and ipv6_layer.plen else 0
+                    expected_length += ipv6_header_len + ipv6_payload_len
+
+                # 检查是否有trailer
+                if len(packet_bytes) > expected_length:
+                    trailer_data = packet_bytes[expected_length:]
+
+                    # 检查是否是以太网padding（通常是0x00填充）
+                    if len(trailer_data) > 0:
+                        # 如果trailer全是0x00，可能是padding
+                        if all(b == 0 for b in trailer_data):
+                            return {'type': 'padding', 'data': trailer_data, 'description': f'以太网填充 ({len(trailer_data)} 字节)'}
+                        else:
+                            return {'type': 'custom', 'data': trailer_data, 'description': f'自定义尾部数据 ({len(trailer_data)} 字节)'}
+
+            return None
+
+        except Exception as e:
+            print(f"检测trailer时发生错误: {e}")
+            return None
 
     def update_payload_display(self, text_widget, data, format_type):
         """更新应用层数据显示"""
@@ -1993,6 +2205,9 @@ class PcapGeneratorGUI:
                 messagebox.showerror("错误", "无效的数据包索引")
                 return
 
+            # 清除之前的错误信息
+            self.last_rebuild_error = None
+
             # 重构数据包
             new_packet = self.rebuild_packet(packet_index)
 
@@ -2003,9 +2218,16 @@ class PcapGeneratorGUI:
                 # 更新主预览列表
                 self.update_packet_preview()
 
-                messagebox.showinfo("成功", "数据包修改已应用")
+                # 重新加载编辑器以显示更新后的数据
+                self.load_packet_for_editing(editor_frame, packet_index)
+
+                messagebox.showinfo("成功", "数据包修改已应用，编辑器已更新")
             else:
-                messagebox.showerror("错误", "重构数据包失败")
+                # 显示详细的错误信息
+                error_msg = "重构数据包失败"
+                if hasattr(self, 'last_rebuild_error') and self.last_rebuild_error:
+                    error_msg += f"\n\n详细错误信息：\n{self.last_rebuild_error}"
+                messagebox.showerror("错误", error_msg)
 
         except Exception as e:
             messagebox.showerror("错误", f"应用修改时发生错误：{str(e)}")
@@ -2025,9 +2247,13 @@ class PcapGeneratorGUI:
                     if key.startswith('eth_0_'):
                         field_name = key.split('_')[-1]
                         if field_name == 'type':
-                            eth_fields[field_name] = int(var.get(), 16)
+                            value = var.get()
+                            if value and value != 'None':
+                                eth_fields[field_name] = int(value, 16)
                         else:
-                            eth_fields[field_name] = var.get()
+                            value = var.get()
+                            if value and value != 'None':
+                                eth_fields[field_name] = value
 
                 layers.append(Ether(**eth_fields))
 
@@ -2038,9 +2264,16 @@ class PcapGeneratorGUI:
                     if key.startswith('ip_1_'):
                         field_name = key.split('_')[-1]
                         if field_name in ['version', 'ihl', 'tos', 'len', 'id', 'flags', 'ttl', 'proto']:
-                            ip_fields[field_name] = int(var.get())
+                            value = var.get()
+                            if value and value != 'None':
+                                try:
+                                    ip_fields[field_name] = int(value)
+                                except ValueError:
+                                    print(f"警告: IP字段 {field_name} 的值 '{value}' 无法转换为整数，跳过")
                         else:
-                            ip_fields[field_name] = var.get()
+                            value = var.get()
+                            if value and value != 'None':
+                                ip_fields[field_name] = value
 
                 layers.append(IP(**ip_fields))
 
@@ -2050,9 +2283,16 @@ class PcapGeneratorGUI:
                     if key.startswith('ipv6_1_'):
                         field_name = key.split('_')[-1]
                         if field_name in ['version', 'tc', 'plen', 'hlim']:
-                            ipv6_fields[field_name] = int(var.get())
+                            value = var.get()
+                            if value and value != 'None':
+                                try:
+                                    ipv6_fields[field_name] = int(value)
+                                except ValueError:
+                                    print(f"警告: IPv6字段 {field_name} 的值 '{value}' 无法转换为整数，跳过")
                         else:
-                            ipv6_fields[field_name] = var.get()
+                            value = var.get()
+                            if value and value != 'None':
+                                ipv6_fields[field_name] = value
 
                 layers.append(IPv6(**ipv6_fields))
 
@@ -2063,7 +2303,12 @@ class PcapGeneratorGUI:
                     if key.startswith('tcp_2_'):
                         field_name = key.split('_')[-1]
                         if field_name in ['sport', 'dport', 'seq', 'ack', 'window', 'urgptr']:
-                            tcp_fields[field_name] = int(var.get())
+                            value = var.get()
+                            if value and value != 'None':
+                                try:
+                                    tcp_fields[field_name] = int(value)
+                                except ValueError:
+                                    print(f"警告: TCP字段 {field_name} 的值 '{value}' 无法转换为整数，跳过")
 
                 # 处理TCP标志位
                 flags = 0
@@ -2081,18 +2326,32 @@ class PcapGeneratorGUI:
                     if key.startswith('udp_2_'):
                         field_name = key.split('_')[-1]
                         if field_name in ['sport', 'dport', 'len', 'chksum']:
-                            udp_fields[field_name] = int(var.get())
+                            value = var.get()
+                            if value and value != 'None':
+                                try:
+                                    udp_fields[field_name] = int(value)
+                                except ValueError:
+                                    print(f"警告: UDP字段 {field_name} 的值 '{value}' 无法转换为整数，跳过")
 
                 layers.append(UDP(**udp_fields))
 
             # 重构应用层数据
             payload_text_key = None
             payload_format_key = None
+            trailer_text_key = None
+            trailer_format_key = None
+
             for key in self.edit_fields.keys():
                 if key.endswith('_text'):
-                    payload_text_key = key
+                    if 'payload' in key:
+                        payload_text_key = key
+                    elif 'trailer' in key:
+                        trailer_text_key = key
                 elif key.endswith('_format'):
-                    payload_format_key = key
+                    if 'payload' in key:
+                        payload_format_key = key
+                    elif 'trailer' in key:
+                        trailer_format_key = key
 
             if payload_text_key and payload_format_key:
                 text_widget = self.edit_fields[payload_text_key]
@@ -2110,12 +2369,37 @@ class PcapGeneratorGUI:
 
                 # 重新计算长度字段和校验和
                 packet = self.recalculate_packet_fields(packet)
+
+                # 添加trailer数据
+                if trailer_text_key and trailer_format_key:
+                    text_widget = self.edit_fields[trailer_text_key]
+                    format_var = self.edit_fields[trailer_format_key]
+                    trailer_data = self.get_payload_from_text(text_widget, format_var.get())
+
+                    if trailer_data:
+                        # 将trailer数据附加到数据包末尾
+                        packet_bytes = bytes(packet)
+                        packet_with_trailer = packet_bytes + trailer_data
+
+                        # 重新构建数据包（保持原有结构但包含trailer）
+                        try:
+                            # 使用原始数据包类型重新构建
+                            packet = packet.__class__(packet_with_trailer)
+                        except:
+                            # 如果重构失败，使用Raw层包装
+                            from scapy.all import Raw
+                            packet = Raw(packet_with_trailer)
+
                 return packet
 
             return None
 
         except Exception as e:
             print(f"重构数据包错误: {e}")
+            import traceback
+            traceback.print_exc()
+            # 将错误信息存储，供apply_packet_changes使用
+            self.last_rebuild_error = str(e)
             return None
 
     def recalculate_packet_fields(self, packet):

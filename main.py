@@ -11,6 +11,7 @@ from gui.main_window import PcapGeneratorGUI
 
 def main():
     """主函数"""
+    print("启动PCAP生成工具...")
     try:
         app = PcapGeneratorGUI()
         app.run()
